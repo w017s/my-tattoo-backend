@@ -1,54 +1,59 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
 import os
-import uuid
-from utils import process_audio, generate_patterns
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
+from utils import generate_all_styles
 
 app = Flask(__name__)
-CORS(app)
 
-UPLOAD_FOLDER = 'backend/static/audio'
-IMAGE_FOLDER = 'backend/static/images'
-ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'mov'}
+UPLOAD_FOLDER = 'audio'
+OUTPUT_FOLDER = 'output'
+ALLOWED_EXTENSIONS = {'mp3', 'm4a', 'wav', 'mov'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['IMAGE_FOLDER'] = IMAGE_FOLDER
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# 检查文件格式
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+@app.route('/')
+def index():
+    return jsonify({"message": "Server is running"})
 
-# 上传音频并生成图案
-@app.route('/upload_audio', methods=['POST'])
+@app.route('/upload', methods=['POST'])
 def upload_audio():
     if 'file' not in request.files:
-        return jsonify({"error": "No file part"})
-
+        return jsonify({"error": "No file part"}), 400
     file = request.files['file']
     if file.filename == '':
-        return jsonify({"error": "No selected file"})
-
+        return jsonify({"error": "No selected file"}), 400
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
+        return jsonify({"message": "File uploaded successfully", "filename": filename})
+    else:
+        return jsonify({"error": "Invalid file type"}), 400
 
-        # 处理音频，生成图案
-        audio_path = filepath
-        pattern_urls = generate_patterns(audio_path)
+@app.route('/generate', methods=['POST'])
+def generate():
+    data = request.get_json()
+    filename = data.get('filename')
+    if not filename:
+        return jsonify({"error": "Missing filename"}), 400
+    audio_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    if not os.path.exists(audio_path):
+        return jsonify({"error": "File not found"}), 404
+    output_paths = generate_all_styles(audio_path, filename)
+    urls = [f"/output/{os.path.basename(p)}" for p in output_paths]
+    return jsonify({"message": "Images generated", "images": urls})
 
-        return jsonify({"status": "success", "patterns": pattern_urls})
-    return jsonify({"error": "Invalid file format"})
-
-
-# 提供图案文件的访问
-@app.route('/static/images/<filename>')
-def serve_image(filename):
-    return send_from_directory(IMAGE_FOLDER, filename)
-
+@app.route('/output/<filename>')
+def serve_output(filename):
+    return send_from_directory(app.config['OUTPUT_FOLDER'], filename)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 10000))  # render 会自动设置 PORT
+    app.run(host='0.0.0.0', port=port)
